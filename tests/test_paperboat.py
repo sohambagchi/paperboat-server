@@ -145,6 +145,47 @@ def test_merge_rejects_citation_line_as_abstract_and_falls_back_to_arxiv_venue()
     assert m["venue"] == "arXiv" and m["kind"] == "misc"
 
 
+def test_dblp_sparql_lookup():
+    import asyncio
+
+    import httpx
+
+    from paperboat import sources
+
+    conf, corr = "https://dblp.org/rec/conf/boats/Lovelace24", "https://dblp.org/rec/journals/corr/abs-2401-00001"
+    rows = {
+        "contains-word": [{"p": conf, "title": "Folding Paper Boats at Scale: A Study."},
+                          {"p": corr, "title": "Folding Paper Boats at Scale: A Study"},
+                          {"p": "https://dblp.org/rec/x", "title": "Folding Paper Planes at Scale: A Survey"}],
+        "hasSignature": [{"p": conf, "ord": "2", "name": "Charles Babbage 0001"}, {"p": conf, "ord": "1", "name": "Ada Lovelace"},
+                         {"p": corr, "ord": "1", "name": "Ada Lovelace"}],
+        "publishedIn": [{"p": conf, "title": "Folding Paper Boats at Scale: A Study.", "year": "2024", "venue": "BOATS",
+                         "type": "https://dblp.org/rdf/schema#Inproceedings", "doi": "https://doi.org/10.1234/BOATS.1"},
+                        {"p": corr, "title": "Folding Paper Boats at Scale: A Study", "year": "2024", "venue": "CoRR",
+                         "type": "https://dblp.org/rdf/schema#Informal", "doi": "https://doi.org/10.48550/arXiv.2401.00001"}],
+    }
+    queries = []
+
+    def answer(request):
+        q = request.url.params["query"]
+        queries.append(q)
+        kind = next(k for k in rows if k in q)
+        bindings = [{k: {"type": "literal", "value": v} for k, v in r.items()} for r in rows[kind]]
+        return httpx.Response(200, json={"results": {"bindings": bindings}},
+                              headers={"content-type": "application/sparql-results+json"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as c:
+            return await sources.dblp(c, "Folding Paper Boats at Scale: A Study")
+
+    pub, pre = sorted(asyncio.run(run()), key=lambda r: r["source"])
+    assert pub["source"] == "dblp" and pub["venue"] == "BOATS" and pub["kind"] == "inproceedings"
+    assert pub["year"] == 2024 and pub["doi"] == "10.1234/boats.1" and pub["title"].endswith("Study")
+    assert [a["name"] for a in pub["authors"]] == ["Ada Lovelace", "Charles Babbage"]
+    assert pre["source"] == "dblp-corr" and pre["venue"] is None and pre["arxiv_id"] == "2401.00001"
+    assert all(w in queries[0] for w in ('"folding"', '"boats"', '"study"', '"scale"', '"paper"'))
+
+
 def test_bibtex_generate_and_rekey():
     p = {"title": "The Boat & You", "authors": [{"name": "Ada Lovelace"}], "year": 2024,
          "venue": "BOATS", "kind": "inproceedings"}

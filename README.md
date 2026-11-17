@@ -49,14 +49,15 @@ systemctl --user enable --now paperboat && loginctl enable-linger $USER
 | Crossref | metadata for a DOI |
 | doi.org | publisher BibTeX |
 | OpenAlex | institutions and countries of authors, published venue, abstract |
-| DBLP | venue abbreviations and clean BibTeX for CS papers |
+| DBLP, through its SPARQL service | venues of CS papers and the published version of preprints |
 | Semantic Scholar | venue and abstract |
 
-Every source is best-effort. DBLP and Semantic Scholar often throttle anonymous clients;
-when they do, the venue of an arXiv paper may stay "arXiv". You can then fix it by hand,
+Every source is best-effort. Semantic Scholar often throttles anonymous clients and DBLP
+only covers computer science; when neither knows a paper, the venue of an arXiv paper may
+stay "arXiv". You can then fix it by hand,
 or click **Look up again** later. A paper is *complete* when it has a PDF, title,
 authors, year, and venue; an arXiv id counts as a venue. BibTeX is always produced: from
-DBLP or the publisher when available, otherwise generated. Citation keys look like
+the publisher (doi.org) when available, otherwise generated. Citation keys look like
 `vaswani2017attention`, are unique across the library, and stay fixed once first author,
 year and title are known, so later edits don't break documents that cite them.
 

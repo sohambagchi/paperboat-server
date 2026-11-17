@@ -13,7 +13,7 @@ import httpx
 
 from . import config
 from .extract import split_doi
-from .util import clean_ws, last_name, person_name, strip_tags, title_sim, year_of
+from .util import ascii_fold, clean_ws, last_name, person_name, strip_tags, title_sim, year_of
 
 log = logging.getLogger("paperboat.sources")
 MATCH = 0.9  # minimum title similarity before trusting a search hit
@@ -215,41 +215,90 @@ async def semantic_scholar(client, ident: str | None = None, title: str | None =
 
 
 # -------------------------------------------------------------------- DBLP
+# DBLP's search API and .bib downloads sit behind a bot check (Anubis). Its SPARQL endpoint
+# (QLever, with a word index over titles) is open, so lookups go through that instead,
+# and BibTeX for DBLP matches is generated from the record.
+
+DBLP_SPARQL = "https://sparql.dblp.org/sparql"
+_DBLP_PREFIX = ("PREFIX dblp: <https://dblp.org/rdf/schema#> "
+                "PREFIX ql: <http://qlever.cs.uni-freiburg.de/builtin-functions/> ")
+_STOP = {"the", "and", "for", "with", "from", "into", "via", "its", "are", "not", "how", "what", "why"}
+_KINDS = {"Inproceedings": "inproceedings", "Article": "article"}
+
+
+async def _sparql(client, query: str) -> list[dict] | None:
+    data = _json(await _get(client, DBLP_SPARQL, params={"query": _DBLP_PREFIX + query},
+                            headers={"Accept": "application/sparql-results+json"}))
+    if data is None:
+        return None
+    return [{k: v["value"] for k, v in b.items()} for b in (data.get("results") or {}).get("bindings", [])]
+
+
+def _title_words(title: str) -> list[str]:
+    """Distinctive words of a title, longest first (ascii_fold also undoes PDF ligatures)."""
+    words = re.findall(r"[a-z0-9]+", ascii_fold(title).lower())
+    return sorted({w for w in words if len(w) >= 3 and w not in _STOP}, key=len, reverse=True)
+
+
+async def _dblp_candidates(client, title: str, words: list[str]) -> list[dict]:
+    """Records whose title has all the words and about the same length."""
+    n = len(title)
+    has = " ".join(f'?t ql:contains-word "{w}" .' for w in words)  # words are [a-z0-9]+
+    return await _sparql(client, (
+        f"SELECT ?p ?title WHERE {{ ?p dblp:title ?title . ?t ql:contains-entity ?title . {has} "
+        f"FILTER(STRLEN(?title) >= {n * 4 // 5} && STRLEN(?title) <= {n * 6 // 5 + 2}) }} LIMIT 100")) or []
+
 
 async def dblp(client, title: str) -> list[dict]:
     """Returns up to two records: the published version ("dblp") and the CoRR preprint ("dblp-corr")."""
-    data = _json(await _get(client, "https://dblp.org/search/publ/api",
-                            params={"q": title, "format": "json", "h": 10}))
-    if not data:
+    words = _title_words(title)
+    if not words:
         return []
-    hits = ((data.get("result") or {}).get("hits") or {}).get("hit") or []
+    rows = await _dblp_candidates(client, title, words[:8])
+    if not rows and len(words) > 3:  # a word garbled in the source title: try the longest three
+        rows = await _dblp_candidates(client, title, words[:3])
+    ranked = sorted(((title_sim(r["title"], title), r["p"]) for r in rows), reverse=True)
+    keys = [p for sim, p in ranked if sim >= MATCH][:6]
+    if not keys:
+        return []
+    values = " ".join(f"<{k}>" for k in keys)
+    info = await _sparql(client, (
+        f"SELECT ?p ?title ?type ?venue ?year ?doi WHERE {{ VALUES ?p {{ {values} }} "
+        "?p dblp:title ?title ; a ?type . FILTER(?type != dblp:Publication) "
+        "OPTIONAL { ?p dblp:publishedIn ?venue } OPTIONAL { ?p dblp:yearOfPublication ?year } "
+        "OPTIONAL { ?p dblp:doi ?doi } }")) or []
+    sigs = await _sparql(client, (
+        f"SELECT ?p ?ord ?name WHERE {{ VALUES ?p {{ {values} }} "
+        "?p dblp:hasSignature ?s . ?s dblp:signatureOrdinal ?ord ; dblp:signatureDblpName ?name }")) or []
+
+    by_key: dict[str, dict] = {}
+    for r in info:  # OPTIONALs can repeat a record; keep the first value of each field
+        d = by_key.setdefault(r["p"], {})
+        for k, v in r.items():
+            d.setdefault(k, v)
+    authors: dict[str, list[tuple[int, str]]] = {}
+    for s in sigs:
+        authors.setdefault(s["p"], []).append((int(s["ord"]), s["name"]))
+
     found: dict[str, dict] = {}
-    for h in hits:
-        info = h.get("info", {})
-        if title_sim(info.get("title"), title) < MATCH:
+    for key in keys:  # best title match first
+        d = by_key.get(key)
+        if not d:
             continue
-        venue = info.get("venue")
-        venue = ", ".join(venue) if isinstance(venue, list) else venue
-        src = "dblp-corr" if venue == "CoRR" else "dblp"
+        corr = d.get("venue") == "CoRR"
+        src = "dblp-corr" if corr else "dblp"
         if src in found:
             continue
-        raw = (info.get("authors") or {}).get("author") or []
-        raw = raw if isinstance(raw, list) else [raw]
-        doi, aid = split_doi(info.get("doi"))
+        doi, aid = split_doi(d.get("doi"))
         found[src] = {
             "source": src,
-            "title": clean_ws(info.get("title", "")).rstrip("."),
-            "authors": [{"name": person_name(a.get("text", "")), "affiliations": []} for a in raw],
-            "year": year_of(info.get("year")),
-            "venue": None if src == "dblp-corr" else venue,
-            "kind": "article" if info.get("type") == "Journal Articles" else "inproceedings",
+            "title": clean_ws(d["title"]).rstrip("."),
+            "authors": [{"name": person_name(n), "affiliations": []} for _, n in sorted(authors.get(key, []))],
+            "year": year_of(d.get("year")),
+            "venue": None if corr else d.get("venue"),
+            "kind": _KINDS.get(d["type"].rsplit("#", 1)[-1], "misc"),
             "doi": doi,
             "arxiv_id": aid,
-            "key": info.get("key"),
+            "key": key.rsplit("/rec/", 1)[-1],
         }
-    for rec in found.values():
-        if rec.get("key"):
-            r = await _get(client, f"https://dblp.org/rec/{rec['key']}.bib")
-            if r is not None and r.text.lstrip().startswith("@"):
-                rec["bibtex"] = r.text.strip()
     return list(found.values())

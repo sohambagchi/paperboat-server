@@ -168,7 +168,7 @@ a PDF or is already stored as a different paper.
   "url": "https://arxiv.org/abs/1706.03762",
   "bibtex": "@inproceedings{vaswani2017attention, ...}",
   "bibtex_key": "vaswani2017attention",
-  "bibtex_source": "dblp",
+  "bibtex_source": "generated",
   "pages": 15,
   "tags": ["transformers"],
   "notes": "",
@@ -187,6 +187,6 @@ a PDF or is already stored as a different paper.
 }
 ```
 
-`bibtex_source` is `dblp`, `doi` (the publisher), `generated` (built from the fields), or
-`manual` (set by a user). `sources` lists where the metadata came from. Relative URLs are
+`bibtex_source` is `doi` (the publisher), `generated` (built from the fields), `manual`
+(set by a user), or `dblp` (on papers added while DBLP's BibTeX could still be fetched). `sources` lists where the metadata came from. Relative URLs are
 relative to `http://HOST:8077`.
