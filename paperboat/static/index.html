@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>paperboat</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M3 20h26l-4 6H7z' fill='%231f5f8b'/><path d='M16 4v14H7z' fill='%237aa6c2'/><path d='M17 7v11h8z' fill='%231f5f8b'/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <button class="icon-btn only-narrow" id="toggle-side" title="Menu" aria-label="Menu">☰</button>
+    <a class="brand" href="#/">
+      <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><path d="M3 20h26l-4 6H7z" fill="currentColor"/><path d="M16 4v14H7z" fill="currentColor" opacity=".45"/><path d="M17 7v11h8z" fill="currentColor"/></svg>
+      paperboat
+    </a>
+    <div class="search">
+      <input id="q" type="search" placeholder="Search titles, authors, abstracts, notes, full text…  ( / )" autocomplete="off">
+    </div>
+    <button class="btn primary" id="add-btn">＋ Add paper</button>
+  </header>
+
+  <div class="layout">
+    <aside class="side" id="side">
+      <nav class="views" id="views"></nav>
+      <section class="browse">
+        <div class="browse-head">
+          <select id="facet-kind" aria-label="Browse by"></select>
+        </div>
+        <input id="facet-filter" type="search" placeholder="Filter…" autocomplete="off">
+        <ul class="facets" id="facets"></ul>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div class="toolbar">
+        <label class="check" title="Select all shown"><input type="checkbox" id="select-all"></label>
+        <span class="count" id="count"></span>
+        <div class="chips" id="chips"></div>
+        <div class="spacer"></div>
+        <label class="ctl">Group <select id="group-by"></select></label>
+        <label class="ctl">Sort <select id="sort">
+          <option value="added">Recently added</option>
+          <option value="year">Year (newest)</option>
+          <option value="year-asc">Year (oldest)</option>
+          <option value="title">Title</option>
+          <option value="author">First author</option>
+        </select></label>
+        <div class="menu">
+          <button class="btn" id="export-btn">Export ▾</button>
+          <div class="menu-pop" id="export-menu" hidden>
+            <button data-export="selected">Selected papers (.bib)</button>
+            <button data-export="shown">Papers shown (.bib)</button>
+            <button data-export="all">Whole library (.bib)</button>
+            <hr>
+            <button data-export="copy-shown">Copy BibTeX of papers shown</button>
+            <button data-export="copy-selected">Copy BibTeX of selected</button>
+          </div>
+        </div>
+      </div>
+      <div class="list" id="list" tabindex="-1"></div>
+    </main>
+
+    <section class="detail" id="detail" hidden></section>
+  </div>
+
+  <div class="reader" id="reader" hidden>
+    <div class="reader-bar">
+      <button class="btn" id="reader-close">← Back</button>
+      <span class="reader-title" id="reader-title"></span>
+      <a class="btn" id="reader-newtab" target="_blank" rel="noopener">Open in new tab ↗</a>
+      <button class="btn" id="reader-notes-toggle">Notes</button>
+    </div>
+    <div class="reader-body">
+      <iframe id="reader-frame" title="PDF"></iframe>
+      <aside class="reader-notes" id="reader-notes">
+        <div class="reader-notes-head">Notes <span class="saved" id="reader-saved"></span></div>
+        <textarea id="reader-text" placeholder="Notes about this paper. They are saved as you type and are searchable."></textarea>
+      </aside>
+    </div>
+  </div>
+
+  <dialog id="add-dialog">
+    <form method="dialog" class="add-form" id="add-form">
+      <h2>Add papers</h2>
+      <label>Link to a PDF or paper page
+        <input type="url" id="add-url" placeholder="https://arxiv.org/abs/…, a DOI link, a direct PDF link…">
+      </label>
+      <div class="drop" id="drop-zone">
+        <p>Drop PDFs here, or <label class="linkish">choose files<input type="file" id="add-file" accept="application/pdf,.pdf" multiple hidden></label></p>
+        <p class="hint">You can also drop PDFs anywhere on the page.</p>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="add-submit" value="ok" class="btn primary">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="dropcover" id="dropcover" hidden><div>Drop PDFs to add them</div></div>
+  <div class="toasts" id="toasts"></div>
+
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>
