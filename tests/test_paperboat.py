@@ -1,10 +1,12 @@
 """Offline tests: identifier parsing, merging, BibTeX, and the HTTP flow with lookups stubbed out."""
 
+import sqlite3
+
 import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
-from paperboat import bibtex, config, extract, ingest
+from paperboat import bibtex, config, db, extract, ingest
 from paperboat.resolve import merge
 
 ABSTRACT = ("We study the problem of collecting papers from many machines into one library. " * 4).strip()
@@ -167,3 +169,26 @@ def test_rejects_non_pdf_and_empty_requests(client):
     r = client.post("/api/papers", files={"file": ("x.pdf", b"<html>nope</html>", "application/pdf")})
     assert r.status_code == 400 and r.json()["status"] == "error"
     assert client.post("/api/papers", json={}).status_code == 400
+
+
+# ------------------------------------------------------------ migrations
+
+def test_migrates_unversioned_v1_database(tmp_path):
+    config.set_data_dir(tmp_path)
+    con = sqlite3.connect(config.DB_PATH)
+    con.executescript(db.SCHEMA_V1)  # a database from before versioning: user_version 0
+    con.commit()
+    con.close()
+    db.init()
+    db.init()  # idempotent
+    with db.connect() as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+
+
+def test_refuses_newer_database(tmp_path):
+    config.set_data_dir(tmp_path)
+    db.init()
+    with db.connect() as con:
+        con.execute(f"PRAGMA user_version = {len(db.MIGRATIONS) + 1}")
+    with pytest.raises(RuntimeError, match="newer"):
+        db.init()

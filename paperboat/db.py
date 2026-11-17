@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 
 from . import config
 
-SCHEMA = """
+# The first schema. Later changes are MIGRATIONS below; never edit this one.
+SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS papers (
     id            INTEGER PRIMARY KEY,
     title         TEXT,
@@ -59,11 +60,41 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# ------------------------------------------------------------ migrations
+# PRAGMA user_version is the number of migrations applied. Append new ones; never
+# reorder or edit an applied one. Each runs in the same transaction as its version bump.
+
+def _v1_schema(con) -> None:
+    for stmt in SCHEMA_V1.split(";"):  # executescript() would commit mid-migration
+        if stmt.strip():
+            con.execute(stmt)
+
+
+MIGRATIONS = [_v1_schema]
+
+
 def init() -> None:
     for d in (config.DATA_DIR, config.PDF_DIR, config.THUMB_DIR):
         d.mkdir(parents=True, exist_ok=True)
-    with connect() as con:
-        con.executescript(SCHEMA)
+    con = sqlite3.connect(config.DB_PATH, timeout=30, isolation_level=None)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        version = con.execute("PRAGMA user_version").fetchone()[0]
+        if version > len(MIGRATIONS):
+            raise RuntimeError(f"{config.DB_PATH} is schema version {version}, newer than this "
+                               f"paperboat ({len(MIGRATIONS)}); upgrade paperboat")
+        for n, migrate in enumerate(MIGRATIONS[version:], start=version + 1):
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                migrate(con)
+                con.execute(f"PRAGMA user_version = {n}")
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+    finally:
+        con.close()
 
 
 @contextmanager

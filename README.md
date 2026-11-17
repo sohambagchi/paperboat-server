@@ -58,6 +58,9 @@ authors, year, venue, and abstract. BibTeX is always produced: from DBLP or the
 publisher when available, otherwise generated. Citation keys look like
 `vaswani2017attention` and are unique across the library.
 
+The database records its schema version (`PRAGMA user_version`). paperboat upgrades it
+on start using the steps in `db.MIGRATIONS`.
+
 ## API (for remote clients)
 
 ### Submit a paper: `POST /api/papers`
