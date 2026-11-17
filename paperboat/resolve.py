@@ -22,7 +22,7 @@ PRIORITY = {
     "arxiv_id": ["arxiv", "landing", "s2", "openalex", "dblp-corr", "pdf"],
     "bibtex":   ["dblp", "doi", "dblp-corr"],
 }
-AFFILIATION_SOURCES = ["openalex", "crossref", "arxiv"]
+AFFILIATION_SOURCES = ["openalex", "landing", "crossref", "arxiv"]
 
 
 def merge(recs: list[dict]) -> dict:

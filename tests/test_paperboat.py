@@ -134,6 +134,14 @@ def test_merge_prefers_published_venue_and_openalex_affiliations():
     assert m["bibtex_source"] == "dblp"
 
 
+def test_merge_takes_affiliations_from_landing_page_when_dblp_has_the_authors():
+    recs = [
+        {"source": "dblp", "title": "T", "venue": "OSDI", "authors": [{"name": "Ada Lovelace", "affiliations": []}]},
+        {"source": "landing", "title": "T", "authors": [{"name": "Ada Lovelace", "affiliations": [{"name": "Engines Ltd"}]}]},
+    ]
+    assert merge(recs)["authors"][0]["affiliations"] == [{"name": "Engines Ltd"}]
+
+
 def test_merge_rejects_citation_line_as_abstract_and_falls_back_to_arxiv_venue():
     recs = [
         {"source": "openalex", "title": "T", "abstract": "Ada Lovelace, Charles Babbage. Proceedings of Boats. " * 4,
