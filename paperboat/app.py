@@ -1,6 +1,7 @@
 """HTTP API and static frontend."""
 
 import logging
+import re
 import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,7 +29,7 @@ app = FastAPI(title="paperboat", version=__version__, lifespan=lifespan)
 # ------------------------------------------------------------- helpers
 
 def public(p: dict, snippet: str | None = None) -> dict:
-    out = {k: v for k, v in p.items() if k not in ("pdf_file", "pdf_sha256")}
+    out = {k: v for k, v in p.items() if k not in ("pdf_file", "pdf_sha256", "key_locked")}
     out["has_pdf"] = bool(p.get("pdf_file"))
     out["pdf_url"] = f"/api/papers/{p['id']}/pdf" if p.get("pdf_file") else None
     out["thumb_url"] = f"/api/papers/{p['id']}/thumb" if p.get("pdf_file") else None
@@ -110,6 +111,10 @@ def _clean_fields(data: dict) -> dict:
                 raise HTTPException(400, f"read_state must be one of {db.READ_STATES}")
         elif k == "starred":
             v = bool(v)
+        elif k == "bibtex_key":
+            v = str(v or "").strip() or None  # empty: derive it again from the metadata
+            if v and not re.fullmatch(r"[A-Za-z0-9_:.\-]+", v):
+                raise HTTPException(400, "bibtex_key may use only letters, digits, and _ : . -")
         elif isinstance(v, str):
             v = v.strip() if k != "notes" else v
             if k in ("doi", "arxiv_id", "venue", "title", "abstract", "url", "kind") and not v:
@@ -191,6 +196,16 @@ async def patch_paper(pid: int, request: Request):
         known = {a["name"]: a.get("affiliations") or [] for a in old["authors"]}
         for a in fields["authors"]:
             a["affiliations"] = a["affiliations"] or known.get(a["name"], [])
+    if "bibtex_key" in fields:
+        if fields["bibtex_key"] == old["bibtex_key"]:
+            del fields["bibtex_key"]
+        elif fields["bibtex_key"] is None:
+            fields["key_locked"] = False
+        else:
+            with db.connect() as con:
+                if db.key_taken(con, fields["bibtex_key"], pid):
+                    raise HTTPException(409, f"citation key {fields['bibtex_key']} is already used by another paper")
+            fields["key_locked"] = True
     regenerate = False
     if "bibtex" in fields:
         if fields["bibtex"]:

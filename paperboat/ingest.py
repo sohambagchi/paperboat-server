@@ -71,13 +71,22 @@ def _pretty_bib(bib: str) -> str:
 
 
 def finalize(con, pid: int, *, fulltext: str | None = None, regenerate: bool = False) -> dict:
-    """Recompute citation key, BibTeX, missing fields and status; refresh the search index."""
+    """Recompute BibTeX, missing fields and status; refresh the search index.
+
+    The citation key is derived from first author, year and title until all three are
+    known, then it is locked, so documents that cite it keep working after later edits.
+    Only an explicit PATCH of bibtex_key changes a locked key."""
     p = db.get(con, pid)
-    key = base = bibtex.make_key(p)
-    n = 0
-    while db.key_taken(con, key, pid):
-        key = base + "abcdefghijklmnopqrstuvwxyz"[n % 26] * (n // 26 + 1)
-        n += 1
+    if p["key_locked"] and p["bibtex_key"]:
+        key = p["bibtex_key"]
+    else:
+        key = base = bibtex.make_key(p)
+        n = 0
+        while db.key_taken(con, key, pid):
+            key = base + "abcdefghijklmnopqrstuvwxyz"[n % 26] * (n // 26 + 1)
+            n += 1
+        if p["title"] and p["year"] and p["authors"]:
+            db.update(con, pid, {"key_locked": True})
     if regenerate or not p["bibtex"] or p["bibtex_source"] in (None, "generated"):
         bib, src = bibtex.generate(p, key), "generated"
     else:

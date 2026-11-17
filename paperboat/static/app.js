@@ -343,6 +343,7 @@ function editForm(p, missing) {
       </div>
       <label class="${cls("abstract")}"><span>Abstract</span><textarea name="abstract" rows="5">${esc(p.abstract)}</textarea></label>
       <label><span>BibTeX (leave as is to keep it in sync with the fields above; clear to regenerate)</span><textarea class="mono" name="bibtex" rows="6">${esc(p.bibtex)}</textarea></label>
+      <label><span>Citation key (stays fixed once set; clear to derive it again from the fields above)</span><input class="mono" name="bibtex_key" value="${esc(p.bibtex_key)}"></label>
       <div class="form-actions">
         ${state.editing ? `<button type="button" class="btn" data-act="cancel-edit">Cancel</button>` : ""}
         <button type="button" class="btn" data-act="resolve">Look up again</button>
@@ -709,6 +710,7 @@ async function saveForm(form, p, { quiet = false } = {}) {
   const current = {
     title: p.title, authors: p.authors.map((a) => a.name).join("\n"), venue: p.venue, year: p.year,
     doi: p.doi, arxiv_id: p.arxiv_id, kind: p.kind, url: p.url, abstract: p.abstract, bibtex: p.bibtex,
+    bibtex_key: p.bibtex_key,
   };
   // Send only what changed, so an untouched form never discards fetched BibTeX or affiliations.
   const data = {};

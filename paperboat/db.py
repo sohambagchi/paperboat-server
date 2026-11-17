@@ -51,7 +51,7 @@ JSON_FIELDS = ("authors", "tags", "missing", "sources")
 REQUIRED = ("title", "authors", "year", "venue")
 EDITABLE = (
     "title", "authors", "year", "venue", "kind", "abstract", "doi", "arxiv_id", "url",
-    "bibtex", "tags", "notes", "read_state", "starred",
+    "bibtex", "bibtex_key", "tags", "notes", "read_state", "starred",
 )
 READ_STATES = ("unread", "reading", "read")
 
@@ -86,7 +86,15 @@ def _v2_recompute_status(con) -> None:
                     (json.dumps(missing), "incomplete" if missing else "complete", p["id"]))
 
 
-MIGRATIONS = [_v1_schema, _v2_recompute_status]
+def _v3_fixed_keys(con) -> None:
+    """Citation keys stay fixed once derived from real metadata."""
+    con.execute("ALTER TABLE papers ADD COLUMN key_locked INTEGER NOT NULL DEFAULT 0")
+    con.execute("UPDATE papers SET key_locked = 1 WHERE bibtex_key IS NOT NULL"
+                " AND title IS NOT NULL AND year IS NOT NULL AND authors != '[]'")
+    con.execute("CREATE UNIQUE INDEX papers_key ON papers(bibtex_key) WHERE bibtex_key IS NOT NULL")
+
+
+MIGRATIONS = [_v1_schema, _v2_recompute_status, _v3_fixed_keys]
 
 
 def init() -> None:
@@ -132,6 +140,8 @@ def to_dict(row: sqlite3.Row | None) -> dict | None:
     for f in JSON_FIELDS:
         d[f] = json.loads(d.get(f) or "[]")
     d["starred"] = bool(d["starred"])
+    if "key_locked" in d:
+        d["key_locked"] = bool(d["key_locked"])
     return d
 
 
@@ -140,7 +150,7 @@ def _encode(fields: dict) -> dict:
     for k, v in fields.items():
         if k in JSON_FIELDS:
             v = json.dumps(v or [])
-        elif k == "starred":
+        elif k in ("starred", "key_locked"):
             v = int(bool(v))
         out[k] = v
     return out

@@ -178,6 +178,30 @@ def test_complete_without_abstract_and_arxiv_counts_as_venue():
     assert db.compute_missing({**p, "arxiv_id": "2401.00001"}) == []
 
 
+def _complete(client, title="Folding Paper Boats at Scale: A Study", extra=""):
+    r = client.post("/api/papers", files={"file": ("p.pdf", make_pdf(title, extra), "application/pdf")})
+    pid = r.json()["id"]
+    client.patch(f"/api/papers/{pid}", json={"authors": "Ada Lovelace", "year": 2024, "venue": "BOATS"})
+    return pid
+
+
+def test_citation_key_stays_fixed(client):
+    pid = _complete(client)
+    p = client.patch(f"/api/papers/{pid}", json={"title": "Sinking Paper Boats", "year": 2025}).json()["paper"]
+    assert p["bibtex_key"] == "lovelace2024folding" and "{lovelace2024folding," in p["bibtex"]
+    assert "key_locked" not in p
+
+    p = client.patch(f"/api/papers/{pid}", json={"bibtex_key": "boats-main"}).json()["paper"]
+    assert p["bibtex_key"] == "boats-main" and p["bibtex"].startswith("@inproceedings{boats-main,")
+    p = client.patch(f"/api/papers/{pid}", json={"bibtex_key": ""}).json()["paper"]
+    assert p["bibtex_key"] == "lovelace2025sinking"
+
+    other = _complete(client, "An Entirely Different Raft Paper")
+    r = client.patch(f"/api/papers/{other}", json={"bibtex_key": "lovelace2025sinking"})
+    assert r.status_code == 409
+    assert client.patch(f"/api/papers/{other}", json={"bibtex_key": "bad key!"}).status_code == 400
+
+
 # ------------------------------------------------------------ migrations
 
 def test_migrates_unversioned_v1_database(tmp_path):
@@ -194,7 +218,7 @@ def test_migrates_unversioned_v1_database(tmp_path):
     with db.connect() as con:
         assert con.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
         p = db.get(con, 1)
-    assert p["status"] == "complete" and p["missing"] == []
+    assert p["status"] == "complete" and p["missing"] == [] and p["key_locked"]
 
 
 def test_refuses_newer_database(tmp_path):

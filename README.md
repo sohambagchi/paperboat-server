@@ -56,7 +56,8 @@ when they do, the venue of an arXiv paper may stay "arXiv". You can then fix it 
 or click **Look up again** later. A paper is *complete* when it has a PDF, title,
 authors, year, and venue; an arXiv id counts as a venue. BibTeX is always produced: from
 DBLP or the publisher when available, otherwise generated. Citation keys look like
-`vaswani2017attention` and are unique across the library.
+`vaswani2017attention`, are unique across the library, and stay fixed once first author,
+year and title are known, so later edits don't break documents that cite them.
 
 The database records its schema version (`PRAGMA user_version`). paperboat upgrades it
 on start using the steps in `db.MIGRATIONS`.
@@ -121,7 +122,8 @@ curl -X POST http://HOST:8077/api/papers/12/pdf -F file=@paper.pdf   # when "pdf
 
 Editable fields: `title`, `authors` (a list of names, a list of `{name, affiliations}`, or
 one name per line), `year`, `venue`, `kind` (`inproceedings`/`article`/`misc`), `abstract`,
-`doi`, `arxiv_id`, `url`, `bibtex` (an empty string regenerates it), `tags`, `notes`,
+`doi`, `arxiv_id`, `url`, `bibtex` (an empty string regenerates it), `bibtex_key` (the
+citation key: fixed once set, `409` if taken, an empty string derives it again), `tags`, `notes`,
 `read_state` (`unread`/`reading`/`read`), `starred`.
 
 ### Other endpoints
