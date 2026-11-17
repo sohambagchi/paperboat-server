@@ -54,8 +54,8 @@ systemctl --user enable --now paperboat && loginctl enable-linger $USER
 Every source is best-effort. DBLP and Semantic Scholar often throttle anonymous clients;
 when they do, the venue of an arXiv paper may stay "arXiv". You can then fix it by hand,
 or click **Look up again** later. A paper is *complete* when it has a PDF, title,
-authors, year, venue, and abstract. BibTeX is always produced: from DBLP or the
-publisher when available, otherwise generated. Citation keys look like
+authors, year, and venue; an arXiv id counts as a venue. BibTeX is always produced: from
+DBLP or the publisher when available, otherwise generated. Citation keys look like
 `vaswani2017attention` and are unique across the library.
 
 The database records its schema version (`PRAGMA user_version`). paperboat upgrades it

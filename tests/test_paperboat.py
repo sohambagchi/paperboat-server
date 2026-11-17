@@ -1,5 +1,6 @@
 """Offline tests: identifier parsing, merging, BibTeX, and the HTTP flow with lookups stubbed out."""
 
+import json
 import sqlite3
 
 import pymupdf
@@ -171,18 +172,29 @@ def test_rejects_non_pdf_and_empty_requests(client):
     assert client.post("/api/papers", json={}).status_code == 400
 
 
+def test_complete_without_abstract_and_arxiv_counts_as_venue():
+    p = {"title": "T", "authors": [{"name": "A"}], "year": 2024, "pdf_file": "x.pdf"}
+    assert db.compute_missing(p) == ["venue"]
+    assert db.compute_missing({**p, "arxiv_id": "2401.00001"}) == []
+
+
 # ------------------------------------------------------------ migrations
 
 def test_migrates_unversioned_v1_database(tmp_path):
     config.set_data_dir(tmp_path)
     con = sqlite3.connect(config.DB_PATH)
     con.executescript(db.SCHEMA_V1)  # a database from before versioning: user_version 0
+    con.execute("INSERT INTO papers (title, authors, year, venue, bibtex_key, pdf_file, status, missing,"
+                " added_at, updated_at) VALUES ('T', ?, 2024, 'X', 'a2024t', 'f.pdf', 'incomplete',"
+                " '[\"abstract\"]', 'now', 'now')", (json.dumps([{"name": "A"}]),))
     con.commit()
     con.close()
     db.init()
     db.init()  # idempotent
     with db.connect() as con:
         assert con.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+        p = db.get(con, 1)
+    assert p["status"] == "complete" and p["missing"] == []
 
 
 def test_refuses_newer_database(tmp_path):

@@ -48,7 +48,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
 """
 
 JSON_FIELDS = ("authors", "tags", "missing", "sources")
-REQUIRED = ("title", "authors", "year", "venue", "abstract")
+REQUIRED = ("title", "authors", "year", "venue")
 EDITABLE = (
     "title", "authors", "year", "venue", "kind", "abstract", "doi", "arxiv_id", "url",
     "bibtex", "tags", "notes", "read_state", "starred",
@@ -58,6 +58,13 @@ READ_STATES = ("unread", "reading", "read")
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def compute_missing(p: dict) -> list[str]:
+    miss = [f for f in REQUIRED if not p.get(f) and not (f == "venue" and p.get("arxiv_id"))]
+    if not p.get("pdf_file"):
+        miss.append("pdf")
+    return miss
 
 
 # ------------------------------------------------------------ migrations
@@ -70,7 +77,16 @@ def _v1_schema(con) -> None:
             con.execute(stmt)
 
 
-MIGRATIONS = [_v1_schema]
+def _v2_recompute_status(con) -> None:
+    """Abstract is no longer required and an arXiv id counts as a venue."""
+    for row in con.execute("SELECT * FROM papers").fetchall():
+        p = to_dict(row)
+        missing = compute_missing(p)
+        con.execute("UPDATE papers SET missing = ?, status = ? WHERE id = ?",
+                    (json.dumps(missing), "incomplete" if missing else "complete", p["id"]))
+
+
+MIGRATIONS = [_v1_schema, _v2_recompute_status]
 
 
 def init() -> None:
@@ -117,13 +133,6 @@ def to_dict(row: sqlite3.Row | None) -> dict | None:
         d[f] = json.loads(d.get(f) or "[]")
     d["starred"] = bool(d["starred"])
     return d
-
-
-def compute_missing(p: dict) -> list[str]:
-    miss = [f for f in REQUIRED if not p.get(f)]
-    if not p.get("pdf_file"):
-        miss.append("pdf")
-    return miss
 
 
 def _encode(fields: dict) -> dict:
