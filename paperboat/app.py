@@ -325,6 +325,14 @@ def info():
 
 # ----------------------------------------------------------- frontend
 
+@app.get("/api.md")
+def api_doc(request: Request):
+    """The API reference as raw Markdown, with this server's address filled in, for
+    pasting into a client app or a prompt."""
+    text = (Path(__file__).parent / "api.md").read_text().replace("http://HOST:8077", _base(request))
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})

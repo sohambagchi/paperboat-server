@@ -330,6 +330,7 @@ dialog::backdrop { background: rgba(10, 15, 20, .35); }
 }
 @media (max-width: 760px) {
   .only-narrow { display: inline-block; }
+  .only-wide { display: none; }
   .brand { width: auto; }
   .brand { font-size: 0; gap: 0; }
   .top { padding: 8px 16px; gap: 8px; }

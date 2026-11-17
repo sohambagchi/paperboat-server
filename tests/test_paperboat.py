@@ -248,6 +248,12 @@ def test_same_title_with_different_arxiv_id_is_a_new_paper(client):
     assert r.status_code == 201 and r.json()["id"] != pid
 
 
+def test_api_doc_is_markdown_with_this_host(client):
+    r = client.get("/api.md")
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert "http://testserver/api/papers" in r.text and "HOST:8077" not in r.text
+
+
 # ------------------------------------------------------------ migrations
 
 def test_migrates_unversioned_v1_database(tmp_path):

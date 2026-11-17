@@ -73,79 +73,13 @@ on start using the steps in `db.MIGRATIONS`.
 
 ## API (for remote clients)
 
-### Submit a paper: `POST /api/papers`
+The full reference is [`paperboat/api.md`](paperboat/api.md). A running server also serves
+it as raw Markdown at `http://HOST:8077/api.md`, with its own address filled in, ready to
+paste into a client app or a prompt. The web app links to it from the **API** button.
 
-Send any one of:
-
-```sh
-# a link (arXiv, DOI, publisher page, direct PDF, ...)
-curl -X POST http://HOST:8077/api/papers -H 'content-type: application/json' \
-     -d '{"url": "https://arxiv.org/abs/1706.03762", "origin": "malt"}'
-
-# a downloaded PDF (url is optional and helps the lookup)
-curl -X POST http://HOST:8077/api/papers -F file=@paper.pdf -F origin=malt -F url=https://...
-
-# raw bytes
-curl -X POST 'http://HOST:8077/api/papers?origin=malt' -H 'content-type: application/pdf' --data-binary @paper.pdf
-```
-
-Optional hint fields, which override anything looked up: `title`, `doi`, `arxiv_id`,
-`venue`, `year`, `tags` (comma-separated).
-
-Responses:
-
-| Code | Meaning |
-| --- | --- |
-| `201` | stored as a new paper |
-| `200` | already in the library (`"duplicate": true`); `existing` says how it matched and links to it |
-| `400` | nothing usable: unreachable URL, not a PDF, and so on (`{"status": "error", "error": ...}`) |
-
-A `201` or `200` paper can still have `"status": "incomplete"`: see `missing` and `fix`.
-
-```json
-{
-  "status": "incomplete",
-  "duplicate": false,
-  "id": 12,
-  "missing": ["venue", "pdf"],
-  "warning": "could not fetch https://dl.acm.org/...: HTTP 403",
-  "paper": { "...": "full record" },
-  "fix": {
-    "method": "PATCH", "url": "/api/papers/12", "fields": ["venue"],
-    "attach_pdf": { "method": "POST", "url": "/api/papers/12/pdf" }
-  }
-}
-```
-
-### Completing a paper
-
-The client asks the user for the fields listed in `fix.fields` and sends them back:
-
-```sh
-curl -X PATCH http://HOST:8077/api/papers/12 -H 'content-type: application/json' \
-     -d '{"venue": "PLDI", "authors": ["Ada Lovelace", "Charles Babbage"], "year": 2024}'
-curl -X POST http://HOST:8077/api/papers/12/pdf -F file=@paper.pdf   # when "pdf" is missing
-```
-
-`PATCH` always returns `200` with `{"status", "missing", "paper"}`. Check `status`.
-
-Editable fields: `title`, `authors` (a list of names, a list of `{name, affiliations}`, or
-one name per line), `year`, `venue`, `kind` (`inproceedings`/`article`/`misc`), `abstract`,
-`doi`, `arxiv_id`, `url`, `bibtex` (an empty string regenerates it), `bibtex_key` (the
-citation key: fixed once set, `409` if taken, an empty string derives it again), `tags`, `notes`,
-`read_state` (`unread`/`reading`/`read`), `starred`.
-
-### Other endpoints
-
-| Endpoint | |
-| --- | --- |
-| `GET /api/papers[?q=...]` | all papers, or full-text search results with snippets |
-| `GET /api/papers/{id}` | one paper |
-| `POST /api/papers/{id}/resolve[?overwrite=true]` | look the paper up again using its current title and ids |
-| `DELETE /api/papers/{id}` | delete the paper and its PDF |
-| `GET /api/papers/{id}/pdf[?download=1]` | the PDF, inline or as an attachment |
-| `GET /api/papers/{id}/bibtex[?download=1]` | the paper's BibTeX entry |
-| `GET /api/export.bib[?ids=1,2,3][&download=1]` | BibTeX for the whole library or for the listed ids |
+In short: `POST /api/papers` with a link or a PDF. The reply is `201` for a new paper or
+`200` with an `existing` link when the paper is already in the library. If `status` is
+`"incomplete"`, `PATCH` the fields listed in `fix`.
 
 ## Frontend
 
