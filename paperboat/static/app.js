@@ -493,7 +493,11 @@ async function submit({ file = null, url = null }) {
     upsert(body.paper);
     render();
     const open = { label: "Open", run: () => openPaper(body.paper.id) };
-    if (body.duplicate) toast("Already in your library", body.paper.title, "", open);
+    if (body.duplicate) {
+      const how = { pdf: "same PDF", doi: "same DOI", arxiv_id: "same arXiv id", title: "same title and first author" }[body.existing?.matched_on];
+      const note = [how, body.existing?.pdf_replaced && "PDF replaced with this one"].filter(Boolean).join("; ");
+      toast("Already in your library", body.paper.title + (note ? ` (${note})` : ""), "", open, 7000);
+    }
     else if (body.status === "incomplete") {
       toast("Added, but metadata is incomplete", `Missing: ${body.missing.join(", ")}${body.warning ? ` (${body.warning})` : ""}`, "warn", open, 9000);
       openPaper(body.paper.id);

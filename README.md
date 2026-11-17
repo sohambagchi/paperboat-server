@@ -64,6 +64,10 @@ Processing Systems 36", "NIPS" and "NeurIPS" all group as **NeurIPS**. The table
 `paperboat/venues.py`. To add or override entries, put `{"Short name": ["alias", ...]}`
 in `venues.json` in the data directory and restart.
 
+The same paper is never stored twice. A submission matches an existing paper by identical
+PDF, DOI, arXiv id, or nearly the same title with the same first author. A newer PDF
+replaces the stored one.
+
 The database records its schema version (`PRAGMA user_version`). paperboat upgrades it
 on start using the steps in `db.MIGRATIONS`.
 
@@ -93,7 +97,7 @@ Responses:
 | Code | Meaning |
 | --- | --- |
 | `201` | stored as a new paper |
-| `200` | already in the library (`"duplicate": true`) |
+| `200` | already in the library (`"duplicate": true`); `existing` says how it matched and links to it |
 | `400` | nothing usable: unreachable URL, not a PDF, and so on (`{"status": "error", "error": ...}`) |
 
 A `201` or `200` paper can still have `"status": "incomplete"`: see `missing` and `fix`.

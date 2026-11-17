@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from . import config
+from .util import last_name, title_sim
 
 # The first schema. Later changes are MIGRATIONS below; never edit this one.
 SCHEMA_V1 = """
@@ -196,6 +197,33 @@ def find_duplicate(con, sha: str | None = None, doi: str | None = None,
     if exclude is not None:
         sql += " AND id != ?"; args.append(exclude)
     return to_dict(con.execute(sql + " LIMIT 1", args).fetchone())
+
+
+TITLE_SAME = 0.95  # title similarity at which two records are the same paper
+
+
+def find_same_title(con, title: str | None, authors: list[dict], doi: str | None = None,
+                    arxiv_id: str | None = None) -> dict | None:
+    """A stored paper that is definitely this one although no identifier matched: nearly the
+    same title and the same first author. Records whose DOIs or arXiv ids differ are
+    different works (a conference and a journal version), never the same paper."""
+    if not title or len(title) < 12:
+        return None
+    first = last_name((authors or [{}])[0].get("name", "")).lower()
+    for row in con.execute("SELECT * FROM papers WHERE title IS NOT NULL"):
+        p = to_dict(row)
+        if doi and p["doi"] and doi.lower() != p["doi"].lower():
+            continue
+        if arxiv_id and p["arxiv_id"] and arxiv_id != p["arxiv_id"]:
+            continue
+        sim = title_sim(title, p["title"])
+        theirs = last_name((p["authors"] or [{}])[0].get("name", "")).lower()
+        if first and theirs:
+            if first == theirs and sim >= TITLE_SAME:
+                return p
+        elif sim >= 0.98:  # no authors to compare: demand a near-exact title
+            return p
+    return None
 
 
 def key_taken(con, key: str, exclude: int | None) -> bool:

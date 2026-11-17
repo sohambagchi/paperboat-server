@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config, db, venues
-from .ingest import META_FIELDS, IngestError, attach_pdf, finalize, ingest, relookup
+from .ingest import META_FIELDS, IngestError, Outcome, attach_pdf, finalize, ingest, relookup, remove_pdf_files
 from .util import last_name, slug
 
 log = logging.getLogger("paperboat")
@@ -40,18 +40,32 @@ def public(p: dict, snippet: str | None = None) -> dict:
     return out
 
 
-def submission_response(p: dict, created: bool, warning: str | None = None) -> JSONResponse:
-    """201 = stored as a new paper; 200 = already in the library.
+def _base(request: Request) -> str:
+    return str(request.base_url).rstrip("/")
+
+
+def submission_response(o: Outcome, request: Request) -> JSONResponse:
+    """201 = stored as a new paper; 200 = already in the library (see "existing").
     Either way "status" may be "incomplete": then PATCH the fields listed in "fix"."""
+    p = o.paper
     body = {
         "status": p["status"],
-        "duplicate": not created,
+        "duplicate": not o.created,
         "id": p["id"],
         "missing": p["missing"],
         "paper": public(p),
     }
-    if warning:
-        body["warning"] = warning
+    if o.warning:
+        body["warning"] = o.warning
+    if not o.created:
+        body["existing"] = {
+            "id": p["id"],
+            "title": p["title"],
+            "matched_on": o.matched_on,
+            "pdf_replaced": o.pdf_replaced,
+            "api_url": f"{_base(request)}/api/papers/{p['id']}",
+            "link": f"{_base(request)}/#/paper/{p['id']}",
+        }
     if p["status"] == "incomplete":
         body["fix"] = {
             "method": "PATCH",
@@ -60,7 +74,7 @@ def submission_response(p: dict, created: bool, warning: str | None = None) -> J
         }
         if "pdf" in p["missing"]:
             body["fix"]["attach_pdf"] = {"method": "POST", "url": f"/api/papers/{p['id']}/pdf"}
-    return JSONResponse(body, status_code=201 if created else 200)
+    return JSONResponse(body, status_code=201 if o.created else 200)
 
 
 def _require(pid: int) -> dict:
@@ -164,10 +178,10 @@ async def submit(request: Request):
         "tags": _normalize_tags(data.get("tags")),
     }
     try:
-        paper, created, warning = await ingest(pdf=pdf, url=url, filename=filename, origin=origin, hints=hints)
+        outcome = await ingest(pdf=pdf, url=url, filename=filename, origin=origin, hints=hints)
     except IngestError as e:
         return JSONResponse({"status": "error", "error": str(e)}, status_code=400)
-    return submission_response(paper, created, warning)
+    return submission_response(outcome, request)
 
 
 # --------------------------------------------------------- read / edit
@@ -229,13 +243,7 @@ def delete_paper(pid: int):
     p = _require(pid)
     with db.connect() as con:
         db.delete(con, pid)
-    if p.get("pdf_file"):
-        others = None
-        with db.connect() as con:
-            others = con.execute("SELECT 1 FROM papers WHERE pdf_file = ?", (p["pdf_file"],)).fetchone()
-        if not others:
-            (config.PDF_DIR / p["pdf_file"]).unlink(missing_ok=True)
-            (config.THUMB_DIR / p["pdf_file"].replace(".pdf", ".png")).unlink(missing_ok=True)
+    remove_pdf_files(p.get("pdf_file"))  # PDFs are unique per paper (sha index)
     return {"deleted": pid}
 
 

@@ -141,6 +141,9 @@ def test_submit_incomplete_then_complete_via_patch(client):
     # duplicate upload is recognized
     r = client.post("/api/papers", files={"file": ("again.pdf", pdf, "application/pdf")})
     assert r.status_code == 200 and r.json()["duplicate"] and r.json()["id"] == pid
+    existing = r.json()["existing"]
+    assert existing["matched_on"] == "pdf" and not existing["pdf_replaced"]
+    assert existing["link"] == f"http://testserver/#/paper/{pid}"
 
     # annotations, search (title, notes, full text), export, files
     client.patch(f"/api/papers/{pid}", json={"tags": "boats, origami", "notes": "check the keel experiments", "starred": True})
@@ -225,6 +228,24 @@ def test_citation_key_stays_fixed(client):
     r = client.patch(f"/api/papers/{other}", json={"bibtex_key": "lovelace2025sinking"})
     assert r.status_code == 409
     assert client.patch(f"/api/papers/{other}", json={"bibtex_key": "bad key!"}).status_code == 400
+
+
+def test_same_title_is_a_duplicate_and_newest_pdf_wins(client):
+    pid = _complete(client)
+    old_file = next(config.PDF_DIR.iterdir())
+    r = client.post("/api/papers", files={"file": ("v2.pdf", make_pdf(extra="Camera-ready."), "application/pdf")})
+    body = r.json()
+    assert r.status_code == 200 and body["duplicate"] and body["id"] == pid
+    assert body["existing"]["matched_on"] == "title" and body["existing"]["pdf_replaced"]
+    assert not old_file.exists() and len(list(config.PDF_DIR.iterdir())) == 1
+    hits = client.get("/api/papers", params={"q": "camera"}).json()["papers"]
+    assert [h["id"] for h in hits] == [pid]
+
+
+def test_same_title_with_different_arxiv_id_is_a_new_paper(client):
+    pid = _complete(client, extra="arXiv:2401.00001")
+    r = client.post("/api/papers", files={"file": ("x.pdf", make_pdf(extra="arXiv:2402.00002"), "application/pdf")})
+    assert r.status_code == 201 and r.json()["id"] != pid
 
 
 # ------------------------------------------------------------ migrations

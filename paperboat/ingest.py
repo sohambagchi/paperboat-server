@@ -3,6 +3,8 @@
 import hashlib
 import logging
 import re
+import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -18,6 +20,15 @@ META_FIELDS = ("title", "authors", "year", "venue", "kind", "abstract", "doi", "
 
 class IngestError(Exception):
     pass
+
+
+@dataclass
+class Outcome:
+    paper: dict
+    created: bool
+    warning: str | None = None
+    matched_on: str | None = None   # for a duplicate: pdf | doi | arxiv_id | title
+    pdf_replaced: bool = False      # a duplicate whose stored PDF was replaced by this one
 
 
 async def _download(client: httpx.AsyncClient, url: str) -> tuple[bytes, str, str]:
@@ -63,6 +74,24 @@ def _save_pdf(data: bytes, sha: str, info: dict) -> dict:
     return {"pdf_file": name, "pdf_sha256": sha, "pages": info.get("pages")}
 
 
+def remove_pdf_files(pdf_file: str | None) -> None:
+    if pdf_file:
+        (config.PDF_DIR / pdf_file).unlink(missing_ok=True)
+        (config.THUMB_DIR / pdf_file.replace(".pdf", ".png")).unlink(missing_ok=True)
+
+
+def _store_pdf(con, p: dict, pdf: bytes, sha: str, info: dict) -> dict:
+    """Store pdf as the paper's PDF. The newest PDF wins: an older one is deleted."""
+    updates = _save_pdf(pdf, sha, info)
+    if not p.get("abstract") and info.get("abstract"):
+        updates["abstract"] = info["abstract"]
+    db.update(con, p["id"], updates)
+    paper = finalize(con, p["id"], fulltext=info.get("fulltext"))
+    if p.get("pdf_file") and p["pdf_file"] != updates["pdf_file"]:
+        remove_pdf_files(p["pdf_file"])
+    return paper
+
+
 def _pretty_bib(bib: str) -> str:
     if "\n" in bib.strip():
         return bib.strip()
@@ -100,16 +129,24 @@ def finalize(con, pid: int, *, fulltext: str | None = None, regenerate: bool = F
     return db.get(con, pid)
 
 
-def _attach(con, paper: dict, pdf: bytes | None, sha: str | None, info: dict | None) -> dict:
-    if pdf and info and not paper.get("pdf_file"):
-        db.update(con, paper["id"], _save_pdf(pdf, sha, info))
-        return finalize(con, paper["id"], fulltext=info.get("fulltext"))
-    return paper
+def _duplicate(con, paper: dict, matched_on: str, pdf: bytes | None, sha: str | None,
+               info: dict | None) -> Outcome:
+    """The submission is a paper we already have. Its PDF, if new, replaces the stored one."""
+    if pdf and info and paper.get("pdf_sha256") != sha:
+        return Outcome(_store_pdf(con, paper, pdf, sha, info), False, None, matched_on, pdf_replaced=True)
+    return Outcome(paper, False, None, matched_on)
+
+
+def _matched_on(dup: dict, sha=None, doi=None, arxiv_id=None) -> str:
+    if sha and dup.get("pdf_sha256") == sha:
+        return "pdf"
+    if doi and (dup.get("doi") or "").lower() == doi.lower():
+        return "doi"
+    return "arxiv_id"
 
 
 async def ingest(*, pdf: bytes | None = None, url: str | None = None, filename: str | None = None,
-                 origin: str | None = None, hints: dict | None = None) -> tuple[dict, bool, str | None]:
-    """Returns (paper, created, warning)."""
+                 origin: str | None = None, hints: dict | None = None) -> Outcome:
     hints = {k: v for k, v in (hints or {}).items() if v}
     landing, warning = None, None
     if url and pdf is None:
@@ -125,7 +162,7 @@ async def ingest(*, pdf: bytes | None = None, url: str | None = None, filename: 
         sha = hashlib.sha256(pdf).hexdigest()
         with db.connect() as con:
             if dup := db.find_duplicate(con, sha=sha):
-                return dup, False, None
+                return Outcome(dup, False, None, "pdf")
 
     ids = ids_from_url(url)
     info = info or {}
@@ -135,7 +172,7 @@ async def ingest(*, pdf: bytes | None = None, url: str | None = None, filename: 
 
     with db.connect() as con:
         if dup := db.find_duplicate(con, doi=doi, arxiv_id=arxiv_id):
-            return _attach(con, dup, pdf, sha, info), False, None
+            return _duplicate(con, dup, _matched_on(dup, doi=doi, arxiv_id=arxiv_id), pdf, sha, info)
 
     titles = [hints.get("title"), *info.get("titles", [])]
     if filename and not any(titles):
@@ -145,20 +182,32 @@ async def ingest(*, pdf: bytes | None = None, url: str | None = None, filename: 
     meta = await resolve(arxiv_id=arxiv_id, doi=doi, titles=titles, landing=landing or None,
                          pdf=pdf_rec, hints=hints)
 
-    with db.connect() as con:
-        if dup := db.find_duplicate(con, doi=meta.get("doi"), arxiv_id=meta.get("arxiv_id")):
-            return _attach(con, dup, pdf, sha, info), False, None
-        fields = {k: meta.get(k) for k in META_FIELDS}
-        fields.update({
-            "bibtex": meta.get("bibtex"), "bibtex_source": meta.get("bibtex_source"),
-            "sources": meta.get("sources", []), "url": url, "origin": origin,
-            "tags": hints.get("tags") or [],
-        })
-        pid = db.insert(con, fields)
-        if pdf:
-            db.update(con, pid, _save_pdf(pdf, sha, info))
-        paper = finalize(con, pid, fulltext=info.get("fulltext", ""))
-    return paper, True, warning
+    try:
+        with db.connect() as con:
+            if dup := db.find_duplicate(con, doi=meta.get("doi"), arxiv_id=meta.get("arxiv_id")):
+                how = _matched_on(dup, doi=meta.get("doi"), arxiv_id=meta.get("arxiv_id"))
+                return _duplicate(con, dup, how, pdf, sha, info)
+            if dup := db.find_same_title(con, meta.get("title"), meta.get("authors") or [],
+                                         doi=meta.get("doi"), arxiv_id=meta.get("arxiv_id")):
+                return _duplicate(con, dup, "title", pdf, sha, info)
+            fields = {k: meta.get(k) for k in META_FIELDS}
+            fields.update({
+                "bibtex": meta.get("bibtex"), "bibtex_source": meta.get("bibtex_source"),
+                "sources": meta.get("sources", []), "url": url, "origin": origin,
+                "tags": hints.get("tags") or [],
+            })
+            pid = db.insert(con, fields)
+            if pdf:
+                db.update(con, pid, _save_pdf(pdf, sha, info))
+            paper = finalize(con, pid, fulltext=info.get("fulltext", ""))
+    except sqlite3.IntegrityError:
+        # The same PDF or paper arrived twice at once and the other request stored it first.
+        with db.connect() as con:
+            dup = db.find_duplicate(con, sha=sha, doi=meta.get("doi"), arxiv_id=meta.get("arxiv_id"))
+        if dup is None:
+            raise
+        return Outcome(dup, False, None, _matched_on(dup, sha, meta.get("doi"), meta.get("arxiv_id")))
+    return Outcome(paper, True, warning)
 
 
 async def attach_pdf(pid: int, pdf: bytes) -> dict:
@@ -169,13 +218,7 @@ async def attach_pdf(pid: int, pdf: bytes) -> dict:
     with db.connect() as con:
         if (dup := db.find_duplicate(con, sha=sha, exclude=pid)):
             raise IngestError(f"this PDF is already stored as paper {dup['id']}")
-        db.update(con, pid, _save_pdf(pdf, sha, info))
-        p = db.get(con, pid)
-        updates = {}
-        if not p["abstract"] and info.get("abstract"):
-            updates["abstract"] = info["abstract"]
-        db.update(con, pid, updates)
-        return finalize(con, pid, fulltext=info.get("fulltext"))
+        return _store_pdf(con, db.get(con, pid), pdf, sha, info)
 
 
 async def relookup(pid: int, overwrite: bool = False) -> dict:
