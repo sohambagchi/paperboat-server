@@ -10,7 +10,7 @@ and exporting citations.
 nix run .                         # serves on 0.0.0.0:8077, data in ~/.local/share/paperboat
 nix run . -- --port 9000 --data /srv/papers
 nix develop -c python -m paperboat --reload   # development
-nix develop -c pytest -q tests                # offline tests
+nix develop -c pytest -q                      # offline tests
 ```
 
 Environment variables: `PAPERBOAT_DATA`, `PAPERBOAT_HOST`, `PAPERBOAT_PORT`, and optional
