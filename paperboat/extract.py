@@ -15,6 +15,11 @@ DOI_IN_TEXT = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>]+)", re.I)
 DOI_IN_URL = re.compile(r"(?:doi\.org/|/doi/(?:abs/|pdf/|full/|epdf/|book/)?)(10\.\d{4,9}/[^?#\s]+)", re.I)
 ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.I)
 
+# Pages about one paper that some publishers print in the PDF itself. USENIX puts a cover
+# page in front of every paper naming its presentation page, which carries citation_* tags.
+LANDING_IN_PDF = re.compile(r"https?://www\.usenix\.org/conference/[\w-]+/(?:[\w-]+/)*presentation/[\w-]+")
+COVER_PAGE = re.compile(r"This paper is included in the Proceedings of", re.I)
+
 BAD_META_TITLE = re.compile(r"^(microsoft word|untitled|title|paper|main|arxiv|\S+\.(pdf|docx?|tex|dvi))\b", re.I)
 
 
@@ -133,9 +138,12 @@ def analyze_pdf(data: bytes) -> dict | None:
             titles.append(t)
         info["titles"] = titles
         info["abstract"] = _abstract_from_text(first) or _abstract_from_text(head)
+        if m := LANDING_IN_PDF.search(re.sub(r"/\s+", "/", first)):  # a URL may wrap onto a new line
+            info["landing_url"] = m.group(0)
 
         if doc.page_count:
-            page = doc[0]
+            cover = doc.page_count > 1 and COVER_PAGE.search(first)
+            page = doc[1 if cover else 0]
             zoom = 360 / max(page.rect.width, 1)
             info["thumbnail"] = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)).tobytes("png")
         return info
@@ -149,14 +157,21 @@ class _MetaParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.meta: dict[str, list[str]] = {}
+        self.authors: list[dict] = []  # citation_author, each followed by its institutions
 
     def handle_starttag(self, tag, attrs):
         if tag != "meta":
             return
         a = dict(attrs)
         name = (a.get("name") or a.get("property") or "").lower()
-        if name and a.get("content"):
-            self.meta.setdefault(name, []).append(a["content"])
+        content = a.get("content")
+        if not (name and content):
+            return
+        self.meta.setdefault(name, []).append(content)
+        if name == "citation_author" and content.strip():
+            self.authors.append({"name": person_name(content), "affiliations": []})
+        elif name == "citation_author_institution" and self.authors and content.strip():
+            self.authors[-1]["affiliations"].append({"name": clean_ws(content)})
 
 
 def parse_landing(html: str, base_url: str) -> dict:
@@ -174,12 +189,13 @@ def parse_landing(html: str, base_url: str) -> dict:
                 return clean_ws(m[k][0])
         return None
 
-    authors = m.get("citation_author") or m.get("dc.creator") or []
+    authors = p.authors or [{"name": person_name(a), "affiliations": []} for a in m.get("dc.creator", []) if a.strip()]
     venue = first("citation_conference_title", "citation_journal_title", "citation_inbook_title")
+    title = first("citation_title", "dc.title")
     rec = {
         "source": "landing",
-        "title": first("citation_title", "dc.title"),
-        "authors": [{"name": person_name(a), "affiliations": []} for a in authors if a.strip()],
+        "title": title and re.sub(r"[{}]", "", title),  # USENIX: "{KSplit}: Automating ..."
+        "authors": authors,
         "venue": venue,
         "kind": "article" if m.get("citation_journal_title") else ("inproceedings" if venue else None),
         "year": year_of(first("citation_publication_date", "citation_date", "citation_online_date", "dc.date")),

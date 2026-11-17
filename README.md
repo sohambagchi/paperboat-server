@@ -44,6 +44,7 @@ systemctl --user enable --now paperboat && loginctl enable-linger $USER
 | --- | --- |
 | URL and PDF text | arXiv id, DOI, title (largest text on page 1), abstract, full text for search |
 | Publisher page `citation_*` tags | title, authors, venue, year, DOI, link to the PDF |
+| USENIX paper page, named on the PDF's cover page | title, authors with institutions, venue, year |
 | arXiv API | title, authors, abstract, year, published DOI |
 | Crossref | metadata for a DOI |
 | doi.org | publisher BibTeX |

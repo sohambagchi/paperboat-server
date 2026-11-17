@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 
 from . import bibtex, config, db
-from .extract import analyze_pdf, is_pdf, ids_from_url, parse_landing, pdf_url_for
+from .extract import LANDING_IN_PDF, analyze_pdf, ids_from_url, is_pdf, parse_landing, pdf_url_for
 from .resolve import resolve
 
 log = logging.getLogger("paperboat.ingest")
@@ -64,6 +64,23 @@ async def fetch_url(url: str) -> tuple[bytes | None, dict | None, str | None]:
             return None, landing or None, "no PDF found at that URL"
         except (httpx.HTTPError, IngestError) as e:
             return None, landing, f"could not fetch {url}: {e}"
+
+
+async def fetch_landing(url: str) -> dict | None:
+    """The citation_* record of a paper's own web page, or None."""
+    headers = {"User-Agent": config.USER_AGENT, "Accept": "text/html"}
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=config.HTTP_TIMEOUT, follow_redirects=True) as c:
+            r = await c.get(url)
+    except httpx.HTTPError as e:
+        log.info("%s failed: %s", url, e)
+        return None
+    if r.status_code != 200 or "html" not in r.headers.get("content-type", ""):
+        log.info("%s -> HTTP %s %s", url, r.status_code, r.headers.get("content-type"))
+        return None
+    rec = parse_landing(r.text, str(r.url))
+    rec.pop("pdf_url", None)
+    return rec or None
 
 
 def _save_pdf(data: bytes, sha: str, info: dict) -> dict:
@@ -164,8 +181,10 @@ async def ingest(*, pdf: bytes | None = None, url: str | None = None, filename: 
             if dup := db.find_duplicate(con, sha=sha):
                 return Outcome(dup, False, None, "pdf")
 
-    ids = ids_from_url(url)
     info = info or {}
+    if not landing and info.get("landing_url"):  # e.g. the page a USENIX cover page names
+        landing = await fetch_landing(info["landing_url"])
+    ids = ids_from_url(url)
     landing = landing or {}
     arxiv_id = hints.get("arxiv_id") or ids.get("arxiv_id") or landing.get("arxiv_id") or info.get("arxiv_id")
     doi = hints.get("doi") or ids.get("doi") or landing.get("doi") or info.get("doi")
@@ -193,7 +212,7 @@ async def ingest(*, pdf: bytes | None = None, url: str | None = None, filename: 
             fields = {k: meta.get(k) for k in META_FIELDS}
             fields.update({
                 "bibtex": meta.get("bibtex"), "bibtex_source": meta.get("bibtex_source"),
-                "sources": meta.get("sources", []), "url": url, "origin": origin,
+                "sources": meta.get("sources", []), "url": url or info.get("landing_url"), "origin": origin,
                 "tags": hints.get("tags") or [],
             })
             pid = db.insert(con, fields)
@@ -225,7 +244,11 @@ async def relookup(pid: int, overwrite: bool = False) -> dict:
     """Run the online lookup again with whatever the paper now has (e.g. a corrected title)."""
     with db.connect() as con:
         p = db.get(con, pid)
-    meta = await resolve(arxiv_id=p["arxiv_id"], doi=p["doi"], titles=[p["title"]])
+        row = con.execute("SELECT fulltext FROM papers_fts WHERE rowid = ?", (pid,)).fetchone()
+    landing = None
+    if m := LANDING_IN_PDF.search(re.sub(r"/\s+", "/", (row[0] if row else "")[:5000])):
+        landing = await fetch_landing(m.group(0))
+    meta = await resolve(arxiv_id=p["arxiv_id"], doi=p["doi"], titles=[p["title"]], landing=landing)
     with db.connect() as con:
         p = db.get(con, pid)
         updates = {}

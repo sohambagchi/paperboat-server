@@ -43,8 +43,9 @@ def test_pdf_url_rewrites():
 
 def test_parse_landing():
     html = """<html><head>
-      <meta name="citation_title" content="Paper Boats">
+      <meta name="citation_title" content="{Paper} Boats">
       <meta name="citation_author" content="Lovelace, Ada">
+      <meta name="citation_author_institution" content="Analytical Engines Ltd">
       <meta name="citation_author" content="Charles Babbage">
       <meta name="citation_conference_title" content="BOATS '24">
       <meta name="citation_publication_date" content="2024/05/01">
@@ -54,9 +55,58 @@ def test_parse_landing():
     rec = extract.parse_landing(html, "https://pub.example/paper/1")
     assert rec["title"] == "Paper Boats"
     assert [a["name"] for a in rec["authors"]] == ["Ada Lovelace", "Charles Babbage"]
+    assert [a["affiliations"] for a in rec["authors"]] == [[{"name": "Analytical Engines Ltd"}], []]
     assert rec["year"] == 2024 and rec["kind"] == "inproceedings"
     assert rec["pdf_url"] == "https://pub.example/files/boats.pdf"
     assert extract.parse_landing("<html>challenge</html>", "https://x") == {}
+
+
+USENIX_PAGE = "https://www.usenix.org/conference/osdi22/presentation/lovelace"
+
+
+def make_usenix_pdf() -> bytes:
+    """A USENIX-style PDF: a cover page naming the paper's page, then the paper."""
+    doc = pymupdf.open()
+    cover = doc.new_page()
+    cover.insert_textbox(pymupdf.Rect(72, 72, 540, 300),
+                         "This paper is included in the Proceedings of the\n16th USENIX Symposium on "
+                         "Operating Systems Design and Implementation.\nJuly 11-13, 2022", fontsize=10)
+    cover.insert_text((72, 340), "Folding Paper Boats at Scale", fontsize=18)
+    cover.insert_text((72, 370), "Ada Lovelace, Analytical Engines Ltd", fontsize=10)
+    cover.insert_text((72, 390), USENIX_PAGE, fontsize=10)
+    page = doc.new_page()
+    page.insert_textbox(pymupdf.Rect(72, 72, 540, 700), f"Folding Paper Boats at Scale\nAbstract\n{ABSTRACT}", fontsize=10)
+    return doc.tobytes()
+
+
+def test_analyze_pdf_finds_usenix_page():
+    info = extract.analyze_pdf(make_usenix_pdf())
+    assert info["landing_url"] == USENIX_PAGE
+    assert "landing_url" not in extract.analyze_pdf(make_pdf())
+    older = "https://www.usenix.org/conference/atc17/technical-sessions/presentation/lawall"
+    assert extract.LANDING_IN_PDF.search(older).group(0) == older
+
+
+def test_usenix_pdf_gets_metadata_from_its_page(client, monkeypatch):
+    fetched = []
+
+    async def fake_fetch_landing(url):
+        fetched.append(url)
+        return {"source": "landing", "title": "Folding Paper Boats at Scale", "year": 2022, "kind": "inproceedings",
+                "venue": "16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22)",
+                "authors": [{"name": "Ada Lovelace", "affiliations": [{"name": "Analytical Engines Ltd"}]}]}
+
+    monkeypatch.setattr(ingest, "fetch_landing", fake_fetch_landing)
+    r = client.post("/api/papers", files={"file": ("osdi22-lovelace.pdf", make_usenix_pdf(), "application/pdf")})
+    body = r.json()
+    assert r.status_code == 201 and body["status"] == "complete", body["missing"]
+    p = body["paper"]
+    assert p["venue"] == "OSDI" and p["year"] == 2022 and p["url"] == USENIX_PAGE
+    assert p["authors"][0]["affiliations"] == [{"name": "Analytical Engines Ltd"}]
+
+    client.patch(f"/api/papers/{p['id']}", json={"venue": ""})
+    p = client.post(f"/api/papers/{p['id']}/resolve").json()["paper"]  # Look up again reads the page too
+    assert p["venue"] == "OSDI" and fetched == [USENIX_PAGE, USENIX_PAGE]
 
 
 def test_analyze_pdf():
@@ -112,8 +162,7 @@ def client(tmp_path, monkeypatch):
     config.set_data_dir(tmp_path)
 
     async def fake_resolve(**kw):  # nothing found online
-        pdf = kw.get("pdf") or {}
-        return merge([pdf] if pdf else [])
+        return merge([r for r in (kw.get("landing"), kw.get("pdf")) if r])
 
     monkeypatch.setattr(ingest, "resolve", fake_resolve)
     from paperboat.app import app
