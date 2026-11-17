@@ -474,9 +474,11 @@ async function exportBib(which) {
 
 // ---------------------------------------------------------------- adding
 
-async function submit({ file = null, url = null }) {
+// Returns what happened: "added", "incomplete", "duplicate" or "error". In a batch only
+// errors get their own toast; the batch shows progress and a summary instead.
+async function submit({ file = null, url = null }, { batch = false } = {}) {
   const label = file ? file.name : url;
-  const pending = toast("Adding…", label, "", null, 0);
+  const pending = batch ? null : toast("Adding…", label, "", null, 0);
   try {
     let res;
     if (file) {
@@ -488,10 +490,15 @@ async function submit({ file = null, url = null }) {
       res = await fetch("/api/papers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, origin: "web" }) });
     }
     const body = await res.json();
-    pending.remove();
-    if (body.status === "error" || !body.paper) { toast("Couldn't add paper", body.error || body.detail || res.statusText, "err", null, 9000); return; }
+    pending?.remove();
+    if (body.status === "error" || !body.paper) {
+      toast("Couldn't add " + (batch ? label : "paper"), body.error || body.detail || res.statusText, "err", null, 9000);
+      return "error";
+    }
     upsert(body.paper);
     render();
+    const kind = body.duplicate ? "duplicate" : body.status === "incomplete" ? "incomplete" : "added";
+    if (batch) return kind;
     const open = { label: "Open", run: () => openPaper(body.paper.id) };
     if (body.duplicate) {
       const how = { pdf: "same PDF", doi: "same DOI", arxiv_id: "same arXiv id", title: "same title and first author" }[body.existing?.matched_on];
@@ -502,16 +509,107 @@ async function submit({ file = null, url = null }) {
       toast("Added, but metadata is incomplete", `Missing: ${body.missing.join(", ")}${body.warning ? ` (${body.warning})` : ""}`, "warn", open, 9000);
       openPaper(body.paper.id);
     } else toast("Added", body.paper.title, "", open);
+    return kind;
   } catch (e) {
-    pending.remove();
-    toast("Couldn't add paper", e.message, "err", null, 9000);
+    pending?.remove();
+    toast("Couldn't add " + (batch ? label : "paper"), e.message, "err", null, 9000);
+    return "error";
   }
 }
 
+// Each submission does a minute of lookups against rate-limited services, so a big
+// drop goes through a small queue instead of all at once.
+const MAX_UPLOADS = 3;
+const queue = [];
+let active = 0;
+let batch = null; // { total, done, counts, toast } while a multi-paper add is running
+
+function addMany(jobs) {
+  if (!jobs.length) return;
+  const many = jobs.length > 1 || batch !== null;
+  if (many && !batch) {
+    batch = { total: 0, done: 0, counts: { added: 0, incomplete: 0, duplicate: 0, error: 0 }, toast: toast("Adding papers…", "", "", null, 0) };
+  }
+  if (many) batch.total += jobs.length;
+  for (const job of jobs) queue.push({ job, many });
+  showProgress();
+  pump();
+}
+
+function pump() {
+  while (active < MAX_UPLOADS && queue.length) {
+    const { job, many } = queue.shift();
+    active++;
+    submit(job, { batch: many }).then((kind) => {
+      active--;
+      if (many) { batch.counts[kind]++; batch.done++; showProgress(); }
+      pump();
+    });
+  }
+}
+
+function showProgress() {
+  if (!batch) return;
+  const { total, done, counts: c } = batch;
+  if (done < total) {
+    batch.toast.innerHTML = `<div class="t">Adding papers… ${done} of ${total}</div><div>${esc(summary(c))}</div>`;
+    return;
+  }
+  batch.toast.remove();
+  batch = null;
+  const kind = c.error ? "err" : c.incomplete ? "warn" : "";
+  toast(`Added ${c.added + c.incomplete} of ${total} papers`, summary(c) + (c.incomplete ? ". Incomplete ones are under Needs attention." : ""), kind, null, 12000);
+}
+
+function summary(c) {
+  return [c.incomplete && `${c.incomplete} need metadata`, c.duplicate && `${c.duplicate} already in library`,
+          c.error && `${c.error} failed`].filter(Boolean).join(" · ");
+}
+
+const isPdf = (f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+
 function addFiles(files) {
-  const pdfs = [...files].filter((f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
-  if (!pdfs.length) { toast("Only PDFs can be added", "", "warn"); return; }
-  pdfs.forEach((f) => submit({ file: f }));
+  files = [...files];
+  const pdfs = files.filter(isPdf);
+  if (!pdfs.length) { toast("Only PDFs can be added", files.length ? `Got ${files.map((f) => f.name).join(", ")}` : "", "warn"); return; }
+  if (pdfs.length < files.length) toast(`Skipped ${files.length - pdfs.length} files that aren't PDFs`, "", "warn");
+  addMany(pdfs.map((file) => ({ file })));
+}
+
+// A drop can carry files, folders (walked for PDFs), or links: one URL per line in
+// text/uri-list. Everything on the DataTransfer must be read before the first await.
+async function handleDrop(dt) {
+  const text = dt.getData("text/uri-list") || dt.getData("text/plain") || "";
+  const plain = [...dt.files];
+  const entries = [...(dt.items || [])].filter((i) => i.kind === "file").map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  const files = entries.some((e) => e.isDirectory) ? await walkEntries(entries) : plain;
+  if (files.length) return addFiles(files);
+  const links = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  const web = links.filter((l) => /^https?:\/\//.test(l));
+  if (web.length) return addMany(web.map((url) => ({ url })));
+  if (links.some((l) => l.startsWith("file:"))) {
+    toast("Your file manager sent file paths, not files", "Browsers can't read a dropped path. Use Add paper → choose files (you can select many), or drag from another file manager.", "warn", null, 12000);
+  } else if (entries.length || links.length) {
+    toast("Nothing to add in that drop", "Drop PDFs, a folder of PDFs, or links to papers.", "warn");
+  }
+}
+
+async function walkEntries(entries) {
+  const out = [];
+  const walk = async (entry) => {
+    if (entry.isFile) {
+      if (entry.name.toLowerCase().endsWith(".pdf")) out.push(await new Promise((ok, err) => entry.file(ok, err)));
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (;;) { // readEntries returns at most ~100 entries per call
+        const chunk = await new Promise((ok, err) => reader.readEntries(ok, err));
+        if (!chunk.length) break;
+        for (const e of chunk) await walk(e);
+      }
+    }
+  };
+  for (const e of entries) await walk(e);
+  return out;
 }
 
 // ---------------------------------------------------------------- search
@@ -655,12 +753,15 @@ function wire() {
   // add dialog
   const dlg = $("#add-dialog");
   $("#add-btn").addEventListener("click", () => { $("#add-url").value = ""; dlg.showModal(); $("#add-url").focus(); });
-  $("#add-form").addEventListener("submit", () => { const u = $("#add-url").value.trim(); if (dlg.returnValue === "ok" && u) submit({ url: u }); });
+  $("#add-form").addEventListener("submit", () => {
+    const urls = $("#add-url").value.split(/\s+/).filter((u) => /^https?:\/\//.test(u));
+    if (dlg.returnValue === "ok") addMany(urls.map((url) => ({ url })));
+  });
   $("#add-file").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; dlg.close(); });
   const dz = $("#drop-zone");
   dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("over"); });
   dz.addEventListener("dragleave", () => dz.classList.remove("over"));
-  dz.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.remove("over"); dlg.close(); addFiles(e.dataTransfer.files); });
+  dz.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.remove("over"); dlg.close(); handleDrop(e.dataTransfer); });
 
   // drop anywhere; also accept dragged links
   let depth = 0;
@@ -670,15 +771,13 @@ function wire() {
   window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
   window.addEventListener("drop", (e) => {
     e.preventDefault(); depth = 0; $("#dropcover").hidden = true;
-    if (e.dataTransfer.files.length) return addFiles(e.dataTransfer.files);
-    const url = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain");
-    if (/^https?:\/\//.test(url)) submit({ url: url.trim() });
+    handleDrop(e.dataTransfer);
   });
   // paste a link anywhere (outside inputs) to add it
   window.addEventListener("paste", (e) => {
     if (e.target.closest("input, textarea")) return;
-    const text = e.clipboardData.getData("text").trim();
-    if (/^https?:\/\/\S+$/.test(text)) submit({ url: text });
+    const urls = e.clipboardData.getData("text").trim().split(/\s+/);
+    if (urls[0] && urls.every((u) => /^https?:\/\/\S+$/.test(u))) addMany(urls.map((url) => ({ url })));
   });
 
   // keyboard

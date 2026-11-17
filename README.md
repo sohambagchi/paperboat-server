@@ -85,7 +85,8 @@ In short: `POST /api/papers` with a link or a PDF. The reply is `201` for a new 
 
 Open `http://HOST:8077/`.
 
-- **Add papers:** drop PDFs or links anywhere on the page, paste a URL, or use **Add paper**.
+- **Add papers:** drop PDFs, folders of PDFs, or links anywhere on the page, paste one or
+  more URLs, or use **Add paper**. Big drops upload three at a time and end with a summary.
 - **Browse:** the sidebar filters by author, institution, country, venue, year, tag, or the
   machine a paper came from. **Group** splits the list into sections by the same keys.
 - **Search:** full-text search over titles, authors, affiliations, abstracts, notes, tags,
