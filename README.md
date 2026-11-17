@@ -59,6 +59,11 @@ DBLP or the publisher when available, otherwise generated. Citation keys look li
 `vaswani2017attention`, are unique across the library, and stay fixed once first author,
 year and title are known, so later edits don't break documents that cite them.
 
+Venue names are mapped to one short name per venue, so "Advances in Neural Information
+Processing Systems 36", "NIPS" and "NeurIPS" all group as **NeurIPS**. The table is in
+`paperboat/venues.py`. To add or override entries, put `{"Short name": ["alias", ...]}`
+in `venues.json` in the data directory and restart.
+
 The database records its schema version (`PRAGMA user_version`). paperboat upgrades it
 on start using the steps in `db.MIGRATIONS`.
 

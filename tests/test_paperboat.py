@@ -7,7 +7,7 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
-from paperboat import bibtex, config, db, extract, ingest
+from paperboat import bibtex, config, db, extract, ingest, venues
 from paperboat.resolve import merge
 
 ABSTRACT = ("We study the problem of collecting papers from many machines into one library. " * 4).strip()
@@ -170,6 +170,31 @@ def test_rejects_non_pdf_and_empty_requests(client):
     r = client.post("/api/papers", files={"file": ("x.pdf", b"<html>nope</html>", "application/pdf")})
     assert r.status_code == 400 and r.json()["status"] == "error"
     assert client.post("/api/papers", json={}).status_code == 400
+
+
+@pytest.mark.parametrize("given,expected", [
+    ("Advances in Neural Information Processing Systems 36", "NeurIPS"),
+    ("NIPS", "NeurIPS"),
+    ("Proceedings of the 45th ACM SIGPLAN International Conference on Programming Language "
+     "Design and Implementation", "PLDI"),
+    ("2024 IEEE Symposium on Security and Privacy (SP)", "IEEE S&P"),
+    ("PLDI '24: Proceedings of whatever", "PLDI"),
+    ("CoRR", "arXiv"),
+    ("Machine Learning", "Machine Learning"),          # the journal, not ICML
+    ("Workshop on Boats (PLDI)", "Workshop on Boats (PLDI)"),
+    ("BOATS", "BOATS"),
+])
+def test_venue_canonical(given, expected):
+    assert venues.canonical(given) == expected
+
+
+def test_merge_skips_preprint_venue_and_canonicalizes():
+    recs = [
+        {"source": "s2", "title": "T", "venue": "arXiv.org", "arxiv_id": "2301.00001"},
+        {"source": "crossref", "title": "T", "venue": "Proceedings of the ACM on Programming Languages"},
+    ]
+    assert merge(recs)["venue"] == "PACMPL"
+    assert merge(recs[:1])["venue"] == "arXiv"
 
 
 def test_complete_without_abstract_and_arxiv_counts_as_venue():

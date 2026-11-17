@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, config, db
+from . import __version__, config, db, venues
 from .ingest import META_FIELDS, IngestError, attach_pdf, finalize, ingest, relookup
 from .util import last_name, slug
 
@@ -20,6 +20,7 @@ STATIC = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
+    venues.reset()
     yield
 
 
@@ -115,6 +116,8 @@ def _clean_fields(data: dict) -> dict:
             v = str(v or "").strip() or None  # empty: derive it again from the metadata
             if v and not re.fullmatch(r"[A-Za-z0-9_:.\-]+", v):
                 raise HTTPException(400, "bibtex_key may use only letters, digits, and _ : . -")
+        elif k == "venue" and isinstance(v, str):
+            v = venues.canonical(v.strip()) or None
         elif isinstance(v, str):
             v = v.strip() if k != "notes" else v
             if k in ("doi", "arxiv_id", "venue", "title", "abstract", "url", "kind") and not v:

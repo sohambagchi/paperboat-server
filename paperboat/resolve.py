@@ -5,7 +5,7 @@ import logging
 
 import httpx
 
-from . import config, sources
+from . import config, sources, venues
 from .util import last_name, title_sim
 
 log = logging.getLogger("paperboat.resolve")
@@ -30,10 +30,14 @@ def merge(recs: list[dict]) -> dict:
     for r in recs:
         by_src.setdefault(r["source"], {}).update({k: v for k, v in r.items() if v})
     out: dict = {}
+    preprint = False
     for field, order in PRIORITY.items():
         for src in order:
             v = by_src.get(src, {}).get(field)
             if field == "abstract" and not _plausible_abstract(v, recs):
+                continue
+            if field == "venue" and v and venues.canonical(v) == "arXiv":
+                preprint = True  # S2/OpenAlex say "arXiv.org" even once it's published
                 continue
             if v:
                 out[field] = v
@@ -43,14 +47,16 @@ def merge(recs: list[dict]) -> dict:
     if (v := out.get("venue")) and v.islower():  # OpenAlex sometimes has "neural information processing systems"
         small = {"of", "on", "for", "and", "the", "in", "to", "a"}
         out["venue"] = " ".join(w if i and w in small else w.capitalize() for i, w in enumerate(v.split()))
-    if not out.get("venue") and out.get("arxiv_id"):
-        out["venue"] = by_src.get("arxiv", {}).get("journal_ref") or "arXiv"
+    out["venue"] = venues.canonical(out.get("venue"))
+    if not out.get("venue") and (out.get("arxiv_id") or preprint):
+        out["venue"] = venues.canonical(by_src.get("arxiv", {}).get("journal_ref")) or "arXiv"
         if out["venue"] == "arXiv":
             out["kind"] = "misc"
     out["authors"] = _with_affiliations(out.get("authors") or [], by_src)
     out["sources"] = sorted(s for s in by_src if s not in ("hint",))
     # Whatever the submitting client told us explicitly wins.
     out.update({k: v for k, v in by_src.get("hint", {}).items() if k != "source" and v})
+    out["venue"] = venues.canonical(out.get("venue"))
     return out
 
 
