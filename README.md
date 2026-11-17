@@ -86,10 +86,11 @@ Responses:
 
 | Code | Meaning |
 | --- | --- |
-| `201` | stored, metadata complete |
-| `200` | already in the library (`"duplicate": true`), complete |
-| `422` | stored, but something is missing: see `missing` and `fix` |
+| `201` | stored as a new paper |
+| `200` | already in the library (`"duplicate": true`) |
 | `400` | nothing usable: unreachable URL, not a PDF, and so on (`{"status": "error", "error": ...}`) |
+
+A `201` or `200` paper can still have `"status": "incomplete"`: see `missing` and `fix`.
 
 ```json
 {

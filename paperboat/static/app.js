@@ -59,7 +59,7 @@ async function api(path, opts = {}) {
   let body = null;
   const ct = res.headers.get("content-type") || "";
   body = ct.includes("json") ? await res.json() : await res.text();
-  if (!res.ok && res.status !== 422) {
+  if (!res.ok) {
     const msg = (body && (body.error || body.detail)) || res.statusText;
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }

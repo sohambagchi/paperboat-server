@@ -39,8 +39,8 @@ def public(p: dict, snippet: str | None = None) -> dict:
 
 
 def submission_response(p: dict, created: bool, warning: str | None = None) -> JSONResponse:
-    """201 = stored and complete; 200 = already in the library and complete;
-    422 = stored but metadata is missing: PATCH the listed fields to complete it."""
+    """201 = stored as a new paper; 200 = already in the library.
+    Either way "status" may be "incomplete": then PATCH the fields listed in "fix"."""
     body = {
         "status": p["status"],
         "duplicate": not created,
@@ -58,10 +58,7 @@ def submission_response(p: dict, created: bool, warning: str | None = None) -> J
         }
         if "pdf" in p["missing"]:
             body["fix"]["attach_pdf"] = {"method": "POST", "url": f"/api/papers/{p['id']}/pdf"}
-        code = 422
-    else:
-        code = 201 if created else 200
-    return JSONResponse(body, status_code=code)
+    return JSONResponse(body, status_code=201 if created else 200)
 
 
 def _require(pid: int) -> dict:

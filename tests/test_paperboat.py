@@ -123,7 +123,7 @@ def client(tmp_path, monkeypatch):
 def test_submit_incomplete_then_complete_via_patch(client):
     pdf = make_pdf()
     r = client.post("/api/papers", files={"file": ("boats.pdf", pdf, "application/pdf")}, data={"origin": "malt"})
-    assert r.status_code == 422
+    assert r.status_code == 201
     body = r.json()
     assert body["status"] == "incomplete" and not body["duplicate"]
     assert set(body["missing"]) == {"authors", "year", "venue"}
